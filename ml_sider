@@ -1,0 +1,74 @@
+from skopt.space import Real, Integer, check_dimension #Ensure that all dimensions in your search space are 
+#correctly defined. Each dimension should be an instance of Real, Integer, or Categorical from skopt.space.
+from skopt import BayesSearchCV, gp_minimize
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import FunctionTransformer
+
+from sklearn.preprocessing import LabelEncoder
+import optuna
+
+import optuna
+from lightgbm import LGBMClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score, precision_score, accuracy_score, f1_score
+import numpy as np
+
+def objective(trial, df):
+    params = {
+        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-4, 1e-1),
+        'num_leaves': trial.suggest_int('num_leaves', 20, 150),
+        'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+        'max_bin': trial.suggest_int('max_bin', 100, 300),
+        'subsample': trial.suggest_uniform('subsample', 0.5, 1.0),
+        'colsample_bytree': trial.suggest_uniform('colsample_bytree', 0.5, 1.0),
+        'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+        'max_depth': trial.suggest_int('max_depth', -1, 50),
+        'min_split_gain': trial.suggest_loguniform('min_split_gain', 1e-8, 1.0),
+        'reg_alpha': trial.suggest_loguniform('reg_alpha', 1e-8, 1.0),
+        'reg_lambda': trial.suggest_loguniform('reg_lambda', 1e-8, 1.0),
+        'subsample_freq': trial.suggest_int('subsample_freq', 1, 10),
+        'class_weight': 'balanced',
+        'random_state': 42
+    }
+    
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    metric_list = []
+    
+    for c, (train_index, val_index) in enumerate(cv.split(df, df['LABEL'])):
+        df_train = df.loc[train_index].reset_index(drop=True)
+        df_val = df.loc[val_index]
+        
+        vectorizer = TfidfVectorizer(max_features=10000).fit(df_train['join_Description'])
+        
+        x_train = vectorizer.transform(df_train['join_Description'])
+        x_val = vectorizer.transform(df_val['join_Description'])
+        
+        y_train = df_train['LABEL']
+        y_val = df_val['LABEL']
+
+        lgbm = LGBMClassifier(**params)
+        lgbm.fit(x_train, y_train)
+    
+        y_pred = lgbm.predict(x_val)
+        y_test = y_val
+       
+        y_prob_pred = lgbm.predict_proba(x_val)[:, 1]
+        
+        auc = roc_auc_score(y_test, y_prob_pred)
+        precision = precision_score(y_test, y_pred, zero_division=1)
+        accuracy = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_pred=y_pred, y_true=y_test)
+    
+        metric_list.append(f1)
+        
+    return np.mean(metric_list)
+
+def optimize_hyperparameters(df):
+    study = optuna.create_study(direction='maximize')
+    study.optimize(lambda trial: objective(trial, df), n_trials=50)
+    return study.best_params
+    
+best_params = optimize_hyperparameters(df)
+print(best_params)
